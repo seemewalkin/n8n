@@ -12,7 +12,7 @@ jobs:
   test-sbom-generation:
     name: Test SBOM Generation and Attestation
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       id-token: write
       attestations: write
@@ -37,8 +37,11 @@ jobs:
           # Extract package to generate accurate SBOM
           tar -xf ${{ steps.download.outputs.package-file }}
 
-          # Generate SBOM from the extracted package
+          # Install dependencies first (needed for accurate SBOM)
           cd package
+          npm install --production --no-audit --no-fund
+
+          # Generate SBOM from the installed package
           npm sbom --sbom-format cyclonedx --sbom-type application > ../sbom.json
           cd ..
 
