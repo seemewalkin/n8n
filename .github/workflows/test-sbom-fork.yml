@@ -1,0 +1,80 @@
+name: 'Test: SBOM Generation in Fork'
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'n8n release version to test (e.g., 1.106.0)'
+        required: true
+        type: string
+
+jobs:
+  test-sbom-generation:
+    name: Test SBOM Generation and Attestation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      attestations: write
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.x
+
+      - name: Download published package
+        id: download
+        run: |
+          # Download the actual published n8n package
+          echo "Testing with n8n version: ${{ github.event.inputs.release_version }}"
+          npm pack n8n@${{ github.event.inputs.release_version }}
+          PACKAGE_FILE=$(ls n8n-*.tgz)
+          echo "package-file=$PACKAGE_FILE" >> $GITHUB_OUTPUT
+          echo "Downloaded: $PACKAGE_FILE"
+
+      - name: Generate SBOM from published package
+        run: |
+          # Extract package to generate accurate SBOM
+          tar -xf ${{ steps.download.outputs.package-file }}
+
+          # Generate SBOM from the extracted package
+          cd package
+          npm sbom --sbom-format cyclonedx --sbom-type application > ../sbom.json
+          cd ..
+
+          # Validate SBOM was created
+          if [[ ! -f "sbom.json" ]]; then
+            echo "Error: SBOM generation failed"
+            exit 1
+          fi
+
+          # Basic validation
+          if ! jq empty sbom.json 2>/dev/null; then
+            echo "Error: Generated SBOM is not valid JSON"
+            exit 1
+          fi
+
+          COMPONENT_COUNT=$(jq '.components | length' sbom.json)
+          echo "Generated SBOM with $COMPONENT_COUNT components"
+
+          # Show first few components for debugging
+          echo "First 5 components:"
+          jq -r '.components[0:5][] | "- \(.name)@\(.version)"' sbom.json
+
+      - name: Attest SBOM to package (TEST)
+        uses: actions/attest-sbom@v2
+        with:
+          subject-path: ${{ steps.download.outputs.package-file }}
+          sbom-path: sbom.json
+
+      - name: Report test results
+        run: |
+          COMPONENT_COUNT=$(jq '.components | length' sbom.json)
+
+          echo "🎉 TEST SUCCESSFUL!"
+          echo "✅ SBOM cryptographically attested to package ${{ steps.download.outputs.package-file }}"
+          echo "📊 SBOM contains $COMPONENT_COUNT components"
+          echo "🔐 Attestation stored in GitHub attestations API"
+          echo ""
+          echo "🔍 To verify the attestation:"
+          echo "gh attestation verify ${{ steps.download.outputs.package-file }} --repo ${{ github.repository }}"
